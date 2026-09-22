@@ -1,12 +1,13 @@
-import feedparser
 import requests
 import json
 import os
 from bs4 import BeautifulSoup
 
 # --- CONFIGURATION ---
-RSS_URL = "https://rsshub.app/twitter/user/EADirect"
-DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")  # Paste your webhook URL here if not using secrets
+# Target public mobile/alternative reader page which renders simple HTML without heavy JS walls
+TARGET_HANDLE = "EADirect"
+PAGE_URL = f"https://vxtwitter.com/{TARGET_HANDLE}"
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL"  # Paste your Discord webhook URL here
 KEYWORDS = []  # Change/add your keywords here (lowercase)
 LAST_SEEN_FILE = "last_seen.json"
 
@@ -20,85 +21,81 @@ def load_last_seen():
     return []
 
 def save_last_seen(seen_list):
+    # Keep the last 50 IDs to prevent the file from growing indefinitely
     with open(LAST_SEEN_FILE, "w") as f:
         json.dump(seen_list[-50:], f)
 
-def extract_image_and_text(raw_summary):
-    """Extracts clean text and the first image URL from RSS HTML content."""
-    soup = BeautifulSoup(raw_summary, "html.parser")
-    
-    # Find the first image if present in the tweet
-    img_tag = soup.find("img")
-    image_url = img_tag["src"] if img_tag else None
-    
-    # Clean up HTML tags for the text description
-    clean_text = soup.get_text(separator="\n").strip()
-    return clean_text, image_url
-
-def send_to_discord(title, link, raw_summary):
-    clean_description, image_url = extract_image_and_text(raw_summary)
-    
+def send_to_discord(tweet_text, tweet_link, media_url):
     embed = {
-        "title": "New @EADirect Tweet",
-        "description": clean_description if clean_description else title,
-        "url": link,
-        "color": 16711680,  # Red accent color
+        "title": f"New @{TARGET_HANDLE} Post Match",
+        "description": tweet_text,
+        "url": tweet_link,
+        "color": 16711680,  # Red theme color
         "fields": [
-            {"name": "Original Post", "value": f"[View on X]({link})", "inline": False}
+            {"name": "Original Post", "value": f"[View on X]({tweet_link})", "inline": False}
         ]
     }
     
     # Attach image directly so it renders as a picture in Discord
-    if image_url:
-        embed["image"] = {"url": image_url}
+    if media_url:
+        embed["image"] = {"url": media_url}
 
     payload = {"embeds": [embed]}
     
     response = requests.post(DISCORD_WEBHOOK_URL, json=payload)
     if response.status_code == 204:
-        print(f"Successfully posted to Discord with image/text.")
+        print(f"Successfully posted tweet to Discord!")
     else:
-        print(f"Failed to post to Discord. Status code: {response.status_code}, Response: {response.text}")
+        print(f"Failed to post to Discord. Status code: {response.status_code}")
 
 def main():
-    print("Checking RSS feed for @EADirect...")
+    print(f"Scraping timeline for @{TARGET_HANDLE} using BeautifulSoup...")
     last_seen = load_last_seen()
     
-    feed = feedparser.parse(RSS_URL)
+    # Custom User-Agent to mimic a standard browser request
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    response = requests.get(PAGE_URL, headers=headers)
     
-    if not feed.entries:
-        print("No entries found or feed is currently rate-limited.")
+    if response.status_code != 200:
+        print(f"Failed to fetch page. Status code: {response.status_code}")
         return
 
-    new_seen = list(last_seen)
-    found_new = False
-
-    for entry in reversed(feed.entries):
-        entry_id = entry.get("id") or entry.get("link")
+    # Pass HTML into BeautifulSoup for parsing
+    soup = BeautifulSoup(response.text, "html.parser")
+    
+    # Extract meta tags or article elements where preview wrappers store posts
+    # Alternative front-ends store individual tweets neatly inside article blocks or meta descriptions
+    posts = soup.find_all("div", class_="tweet-card") # or structural equivalent
+    
+    if not posts:
+        # Fallback: parse open-graph meta tags if it loads as a single profile page card
+        meta_desc = soup.find("meta", property="og:description")
+        meta_image = soup.find("meta", property="og:image")
         
-        if entry_id in last_seen:
-            continue
+        if not meta_desc:
+            print("Could not parse posts via BeautifulSoup.")
+            return
             
-        title = entry.get("title", "")
-        summary = entry.get("summary", "")
-        link = entry.get("link", "")
+        tweet_text = meta_desc.get("content", "")
+        media_url = meta_image.get("content", "") if meta_image else None
+        tweet_link = f"https://twitter.com/{TARGET_HANDLE}"
         
-        # Combine text for keyword matching
-        full_text = f"{title} {summary}".lower()
+        # Use a pseudo-ID based on text content hash or link for state tracking
+        tweet_id = str(hash(tweet_text))
         
-        # Check keyword filter
+        if tweet_id in last_seen:
+            print("No new unique posts found.")
+            return
+            
+        full_text = tweet_text.lower()
         if any(kw.lower() in full_text for kw in KEYWORDS):
             print(f"Match found! Sending to Discord...")
-            send_to_discord(title, link, summary)
+            send_to_discord(tweet_text, tweet_link, media_url)
             
-        new_seen.append(entry_id)
-        found_new = True
+        save_last_seen(last_seen + [tweet_id])
+        return
 
-    if found_new:
-        save_last_seen(new_seen)
-        print("State updated successfully.")
-    else:
-        print("No new posts to process.")
+    print(f"Found {len(posts)} posts to evaluate.")
 
 if __name__ == "__main__":
     main()
