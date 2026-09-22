@@ -1,16 +1,15 @@
 import requests
 import json
 import os
-from bs4 import BeautifulSoup
 
 # --- CONFIGURATION ---
-TARGET_HANDLE = "EADirect"
-PAGE_URL = f"https://vxtwitter.com/{TARGET_HANDLE}"
+TARGET_HANDLE = "futdonk"
+# Direct public JSON endpoint for the account
+API_URL = f"https://api.fxtwitter.com/{TARGET_HANDLE}"
 
-# Pulls the webhook securely from GitHub Actions Secrets
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
-KEYWORDS = ["ea sports", "direct", "update"]  # Customize your lowercase keywords here
+KEYWORDS = ["ea sports", "direct", "update", "fut", "toty", "tots", "sbc"]
 LAST_SEEN_FILE = "last_seen.json"
 
 def load_last_seen():
@@ -28,10 +27,10 @@ def save_last_seen(seen_list):
 
 def send_to_discord(tweet_text, tweet_link, media_url):
     embed = {
-        "title": f"New @{TARGET_HANDLE} Post Match",
+        "title": f"New @{TARGET_HANDLE} Post",
         "description": tweet_text,
         "url": tweet_link,
-        "color": 16711680,  # Red theme color
+        "color": 16711680,
         "fields": [
             {"name": "Original Post", "value": f"[View on X]({tweet_link})", "inline": False}
         ]
@@ -44,47 +43,69 @@ def send_to_discord(tweet_text, tweet_link, media_url):
     response = requests.post(DISCORD_WEBHOOK_URL, json=payload)
     
     if response.status_code == 204:
-        print("Successfully posted tweet to Discord!")
+        print("Successfully posted to Discord!")
     else:
         print(f"Failed to post to Discord. Status code: {response.status_code}")
 
 def main():
-    print(f"Scraping timeline for @{TARGET_HANDLE} using BeautifulSoup...")
+    print(f"Checking @{TARGET_HANDLE} timeline...")
     last_seen = load_last_seen()
     
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    response = requests.get(PAGE_URL, headers=headers)
+    headers = {"User-Agent": "Mozilla/5.0"}
+    response = requests.get(API_URL, headers=headers)
     
     if response.status_code != 200:
-        print(f"Failed to fetch page. Status code: {response.status_code}")
+        print(f"API returned status code: {response.status_code}")
         return
 
-    soup = BeautifulSoup(response.text, "html.parser")
+    data = response.json()
     
-    meta_desc = soup.find("meta", property="og:description")
-    meta_image = soup.find("meta", property="og:image")
-    
-    if not meta_desc:
-        print("Could not parse posts via BeautifulSoup.")
+    # Extract tweets safely from the response
+    tweets = []
+    if "tweets" in data:
+        tweets = data["tweets"]
+    elif "user" in data and "tweets" in data["user"]:
+        tweets = data["user"]["tweets"]
+    elif "tweet" in data:
+        tweets = [data["tweet"]]
+
+    if not tweets:
+        print("No timeline tweets available in current payload response.")
         return
+
+    new_seen = list(last_seen)
+    found_new = false_flag = False
+
+    for tweet in reversed(tweets):
+        tweet_id = str(tweet.get("id"))
         
-    tweet_text = meta_desc.get("content", "")
-    media_url = meta_image.get("content", "") if meta_image else None
-    tweet_link = f"https://twitter.com/{TARGET_HANDLE}"
-    
-    tweet_id = str(hash(tweet_text))
-    
-    if tweet_id in last_seen:
-        print("No new unique posts found.")
-        return
+        if tweet_id in last_seen:
+            continue
+            
+        tweet_text = tweet.get("text", "")
+        tweet_link = tweet.get("url", f"https://twitter.com/{TARGET_HANDLE}")
         
-    full_text = tweet_text.lower()
-    if any(kw.lower() in full_text for kw in KEYWORDS):
-        print("Match found! Sending to Discord...")
-        send_to_discord(tweet_text, tweet_link, media_url)
-        
-    save_last_seen(last_seen + [tweet_id])
-    print("State updated successfully.")
+        media_url = None
+        media = tweet.get("media", {})
+        photos = media.get("photos", [])
+        if photos:
+            media_url = photos[0].get("url")
+
+        full_text = tweet_text.lower()
+        if any(kw.lower() in full_text for kw in KEYWORDS):
+            print(f"Match found! Sending to Discord...")
+            send_to_discord(tweet_text, tweet_link, media_url)
+        else:
+            print(f"Skipped (keyword mismatch): {tweet_text[:30]}...")
+            
+        new_seen.append(tweet_id)
+        found_new = True
+
+    if found_new:
+        save_last_seen(new_seen)
+        print("State updated successfully.")
+    else:
+        print("No new posts found.")
 
 if __name__ == "__main__":
     main()
