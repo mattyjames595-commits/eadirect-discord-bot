@@ -9,7 +9,7 @@ API_URL = f"https://api.fxtwitter.com/{TARGET_HANDLE}"
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
-KEYWORDS = ["ea sports", "direct", "update", "fut", "toty", "tots", "sbc"]
+KEYWORDS = ["6pm"]
 LAST_SEEN_FILE = "last_seen.json"
 
 def load_last_seen():
