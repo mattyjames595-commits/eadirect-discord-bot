@@ -1,13 +1,18 @@
-name: RSS Twitter Discord Bot
+name: Twitter Discord Bot
 
 on:
   schedule:
-    - cron: '*/15 * * * *' # Runs every 15 minutes
-  workflow_dispatch: # Allows manual run button
+    - cron: '*/15 * * * *' # Runs every 15 minutes, 24/7
+  workflow_dispatch: # Allows you to manually trigger a run anytime from the GitHub Actions tab
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    
+    # Give the workflow permission to commit the last_seen.json state update back to the repo
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
